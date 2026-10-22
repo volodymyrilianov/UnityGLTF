@@ -175,7 +175,21 @@ namespace Immersion.Export
 			var go = animator.gameObject;
 			var instanceRoot = PrefabUtility.GetNearestPrefabInstanceRoot(go);
 			var assetPath = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(go);
-			if (!instanceRoot || string.IsNullOrEmpty(assetPath)) { cap.error = "the Animator GameObject is not part of a prefab instance"; Debug.LogError(Tag + " " + c.id + ": " + cap.error); return cap; }
+			if (!instanceRoot || string.IsNullOrEmpty(assetPath))
+			{
+				// Unpacked avatar (no prefab link left in the scene): rebuild from the model its Avatar comes from, rooted
+				// at the Animator GameObject; the scene's own locals below still override the model's.
+				var modelPath = animator.avatar ? AssetDatabase.GetAssetPath(animator.avatar) : "";
+				if (string.IsNullOrEmpty(modelPath) || !AssetDatabase.LoadAssetAtPath<GameObject>(modelPath))
+				{
+					cap.error = "the Animator GameObject is not part of a prefab instance and its Avatar has no source model";
+					Debug.LogError(Tag + " " + c.id + ": " + cap.error);
+					return cap;
+				}
+				instanceRoot = go;
+				assetPath = modelPath;
+				Debug.Log(Tag + " " + c.id + ": unpacked in the scene, rebuilding from the Avatar's model " + modelPath);
+			}
 			cap.instanceAssetPath = assetPath;
 			cap.animatorPathInInstance = go == instanceRoot ? "" : AnimationUtility.CalculateTransformPath(go.transform, instanceRoot.transform);
 			var asset = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
