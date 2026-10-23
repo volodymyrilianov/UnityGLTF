@@ -32,6 +32,14 @@ namespace Immersion.Export
 	///   plugin (longest side in px); default 0 = full resolution.
 	/// - <c>-embedLightmaps true</c>: also embed the full RGBM lightmap pages in the GLB (art-demo
 	///   parity; the sidecars are written either way).
+	/// - <c>-animations false</c>: export no animation clips (default true: UnityGLTF bakes the clips
+	///   of every Animator's controller). Used when a PlayableDirector's timeline is baked into the GLB
+	///   afterwards from <see cref="DirectorBakeProbe"/> (HelperTools <c>glb-timeline</c>): the
+	///   controller clips are not what Unity plays while the timeline runs.
+	/// - <c>-activate "Root/Child;Root/Other"</c>: GameObjects (scene hierarchy paths) switched ON
+	///   in memory before the export (the scene is never saved). For objects a timeline activates
+	///   (an <c>m_IsActive</c> curve): an inactive GameObject is not exported at all, and the bake
+	///   folds the activation into the node's scale (0 = inactive).
 	///
 	/// Exit code 0 = every scene exported; 1 = at least one failed (details on stdout, each
 	/// scene logs a line starting with "[SceneBatchExporter]").
@@ -55,6 +63,8 @@ namespace Immersion.Export
 			var maxTextureSize = Math.Max(0, CliArgs.GetInt("-maxTextureSize", 0));
 			var maxLightmapSize = Math.Max(0, CliArgs.GetInt("-maxLightmapSize", 0));
 			var embedLightmaps = string.Equals(CliArgs.Get("-embedLightmaps"), "true", StringComparison.OrdinalIgnoreCase);
+			var exportAnimations = !string.Equals(CliArgs.Get("-animations"), "false", StringComparison.OrdinalIgnoreCase);
+			var activate = CliArgs.Split(CliArgs.Get("-activate")).Where(s => s.Length > 0).ToList();
 			var previousEmbed = GltfCustomData.EmbedFullLightmapPages;
 			GltfCustomData.EmbedFullLightmapPages = embedLightmaps;
 			Debug.Log("[SceneBatchExporter] contract v" + GltfCustomDataExporter.CONTRACT_VERSION
@@ -62,7 +72,9 @@ namespace Immersion.Export
 				+ ", probe range " + GltfCustomDataExporter.PROBE_RANGE
 				+ ", maxTextureSize " + (maxTextureSize > 0 ? maxTextureSize.ToString() : "unlimited")
 				+ ", maxLightmapSize " + (maxLightmapSize > 0 ? maxLightmapSize.ToString() : "unlimited")
-				+ ", embedLightmaps " + embedLightmaps);
+				+ ", embedLightmaps " + embedLightmaps
+				+ ", animations " + exportAnimations
+				+ (activate.Count > 0 ? ", activate " + string.Join(";", activate) : ""));
 
 			var failures = 0;
 			foreach (var scenePath in scenePaths)
@@ -74,6 +86,13 @@ namespace Immersion.Export
 					if (!scene.IsValid()) throw new Exception("scene not found/openable at '" + scenePath + "'");
 
 					var roots = scene.GetRootGameObjects();
+					foreach (var path in activate)
+					{
+						var go = FindByPath(roots, path);
+						if (!go) throw new Exception("-activate: no GameObject '" + path + "' in " + scenePath);
+						go.SetActive(true);
+						Debug.Log("[SceneBatchExporter] activated " + path);
+					}
 					var transforms = Array.ConvertAll(roots, gameObject => gameObject.transform);
 					if (transforms.Length == 0) throw new Exception("scene has no root GameObjects");
 
@@ -86,6 +105,7 @@ namespace Immersion.Export
 					// ImmersionExportSettings applied; every scene export before 2026-09-24 ran that way).
 					var settings = GLTFSettings.GetDefaultSettings();
 					ImmersionExportSettings.ApplyDefaults(settings, isObjectExport: false, maxTextureSize, maxLightmapSize);
+					settings.ExportAnimations = exportAnimations;
 					var context = new ExportContext(settings);
 					if (!ReferenceEquals(context.settings, settings))
 						throw new Exception("export settings were replaced by the project settings asset");
@@ -118,6 +138,23 @@ namespace Immersion.Export
 			GltfCustomData.EmbedFullLightmapPages = previousEmbed;
 			Debug.Log("[SceneBatchExporter] done: " + (scenePaths.Count - failures) + "/" + scenePaths.Count + " exported to " + outDir);
 			CliArgs.Exit(failures > 0 ? 1 : 0);
+		}
+
+		/// <summary>"Root/Child/Leaf" under the scene roots (inactive objects included); null when absent.</summary>
+		internal static GameObject FindByPath(GameObject[] roots, string path)
+		{
+			var parts = path.Split('/');
+			var root = roots.FirstOrDefault(r => r.name == parts[0]);
+			if (!root) return null;
+			var t = root.transform;
+			for (var i = 1; i < parts.Length && t; i++)
+			{
+				Transform next = null;
+				foreach (Transform child in t)
+					if (child.name == parts[i]) { next = child; break; }
+				t = next;
+			}
+			return t ? t.gameObject : null;
 		}
 	}
 }

@@ -183,6 +183,12 @@ public partial class GltfCustomDataExporter : GLTFExportPluginContext
             case "Bakery/Light":
                 ExportBakeryLight(exporter, material, materialNode);
                 break;
+            case "Axona/Flipbook Emissive URP":
+                ExportAxonaFlipbook(exporter, material, materialNode, extras);
+                break;
+            case "Axon/Mobile Engine Flame":
+                ExportEngineFlame(material, materialNode, extras);
+                break;
         }
 
         materialNode.Extras = extras;
@@ -323,6 +329,72 @@ public partial class GltfCustomDataExporter : GLTFExportPluginContext
         if (cullMode == (int)CullMode.Off) materialNode.DoubleSided = true;
 
         CollectColorTextures(exporter, material, cs, "_BaseTex");
+    }
+
+    // Axona/Flipbook Emissive URP (Axon/AxonaFlipbook/AxonaFlipbook.shader + AxonaFlipbookCommon.hlsl):
+    // unlit, Queue Transparent, Blend SrcAlpha OneMinusSrcAlpha, ZWrite Off, Cull Off. The UV is
+    // remapped onto ONE cell of a Columns x Rows atlas, the cell index stepping with _Time.y:
+    //   index = floor(_StartFrame) + floor(t * AnimationSpeed), wrapped (positive modulo) over
+    //   count = _FrameCount > 0 ? clamp(floor(_FrameCount), 1, cells) : cells when _Loop, else clamped;
+    //   _ManualMode uses floor(_ManualFrame). Row-major from the TOP-LEFT cell; per-cell inset of
+    //   _InsetPixels texels.
+    //   rgb = tex.rgb * _Color.rgb + tex.rgb * _EmissionColor.rgb * max(_EmissionIntensity, 0)
+    //   a   = saturate(tex.a * _Color.a)   (+ clip(a - _Cutoff) when _AlphaClip)
+    // Emission is written RAW (no gamma conversion), like simpleLit's _EmissionColor: a Unity frame
+    // of the 1040 console screens measures 2.4-2.7x the atlas texels in linear light, which is
+    // 10.42 x 0.24 = 2.50 (a GammaToLinear of the HDR value would give ~42x).
+    private static void ExportAxonaFlipbook(GLTFSceneExporter exporter, Material material, GLTFMaterial materialNode, JObject extras)
+    {
+        Color emission = GetColor(material, "_EmissionColor", Color.white) * Mathf.Max(GetFloat(material, "_EmissionIntensity", 1f), 0f);
+        var cs = new JObject
+        {
+            ["shader"] = "flipbook",
+            ["version"] = CONTRACT_VERSION,
+            ["rows"] = GetFloat(material, "Rows_Number", 6f),
+            ["columns"] = GetFloat(material, "Columns_Number", 6f),
+            ["frameCount"] = GetFloat(material, "_FrameCount", 36f),
+            ["fps"] = GetFloat(material, "AnimationSpeed", 20f),
+            ["startFrame"] = GetFloat(material, "_StartFrame", 0f),
+            ["loop"] = GetFloat(material, "_Loop", 1f) > 0.5f,
+            ["manualMode"] = GetFloat(material, "_ManualMode", 0f) > 0.5f,
+            ["manualFrame"] = GetFloat(material, "_ManualFrame", 0f),
+            // _Color: rgb LINEAR (a plain colour property), alpha raw (opacity)
+            ["color"] = ColorJson(GetColor(material, "_Color", Color.white), true),
+            ["emission"] = new JObject { ["r"] = emission.r, ["g"] = emission.g, ["b"] = emission.b },
+            ["insetPixels"] = GetFloat(material, "_InsetPixels", 0.5f),
+            ["alphaClip"] = GetFloat(material, "_AlphaClip", 0f) > 0.5f,
+            ["cutoff"] = GetFloat(material, "_Cutoff", 0.01f),
+            ["cullMode"] = (int)CullMode.Off,
+        };
+        extras["customShader"] = cs;
+        materialNode.DoubleSided = true;
+        materialNode.AlphaMode = AlphaMode.BLEND;
+        CollectColorTextures(exporter, material, cs, "_MainTex");
+    }
+
+    // Axon/Mobile Engine Flame (S01_mostek/VFX/MobileEngineFlame.shader): textureless additive
+    // fumes (Blend SrcAlpha One, ZWrite Off, Cull Back, Queue Transparent).
+    //   phase = _Time.y * _Speed + dot(objectOriginWS, (1.7, 0.3, 0.7))       (Unity world space)
+    //   positionOS.xy *= 0.96 + 0.04 sin(7 phase); positionOS.z *= 0.96 + 0.04 sin(5 phase)
+    //   t = saturate(uv.y); rgb = lerp(_CoreColor, _TailColor, smoothstep(0.02, 0.45, t))
+    //         * _Intensity * (0.85 + 0.15 sin(32 t - 6 phase))
+    //   a = facing^2 * (1 - smoothstep(0.55, 1, t)) * 0.75, facing = saturate(dot(N, V))
+    // The [HDR] colours are written RAW, the same rule as the flipbook / simpleLit emission.
+    private static void ExportEngineFlame(Material material, GLTFMaterial materialNode, JObject extras)
+    {
+        Color core = GetColor(material, "_CoreColor", new Color(2.2f, 2.8f, 3.2f, 1f));
+        Color tail = GetColor(material, "_TailColor", new Color(0.03f, 0.35f, 1.4f, 1f));
+        extras["customShader"] = new JObject
+        {
+            ["shader"] = "engineFlame",
+            ["version"] = CONTRACT_VERSION,
+            ["coreColor"] = new JObject { ["r"] = core.r, ["g"] = core.g, ["b"] = core.b },
+            ["tailColor"] = new JObject { ["r"] = tail.r, ["g"] = tail.g, ["b"] = tail.b },
+            ["intensity"] = GetFloat(material, "_Intensity", 0.8f),
+            ["speed"] = GetFloat(material, "_Speed", 2.5f),
+            ["cullMode"] = (int)CullMode.Back,
+        };
+        materialNode.AlphaMode = AlphaMode.BLEND;
     }
 
     // ───────────────────── Texture collection ──────────────────────

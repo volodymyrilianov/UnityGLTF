@@ -59,6 +59,12 @@ spec colour, `hsv {x,y,z}`).
 | `glass` | `Immersion/Web/GlassLitGi` | art: `roughness`, `reflectionStrength`. Fork: `version`, `color {r,g,b,a}` (`_BaseColor`, rgb linear, a raw), `cullMode` (`_Cull`), `textures {_BaseTex}` (colour texture), `textureNames` |
 | `hair` | `Immersion/Web/HairShader` | art: `_Params {x,y,z,w}`, `_SpecColor {r,g,b}` **linear**, `_SpecIntensity` `_Roughness` `_Anisotropy` `_SpecShift` `_AO`, `textures {_HairIdMap,_HairAoMap}`. Fork: `version`, `textureNames` |
 | `occlusionMask` (fork only) | `Immersion/Web/OcclusionMask` (multiply overlay: `Blend DstColor Zero`, `col = tex(_BaseTex)·_BaseColor; col.rgb += 1 − col.a`) | `version`, `color {r,g,b,a}` (`_BaseColor`, rgb linear, a raw), `scaleOffset` (`_BaseTex_ST`), `cullMode` (`_Cull`), `textures {_BaseTex}` (colour texture), `textureNames` |
+| `flipbook` (fork only) | `Axona/Flipbook Emissive URP` (unlit atlas flipbook: `Blend SrcAlpha OneMinusSrcAlpha`, ZWrite Off, Cull Off; cell index = `floor(_StartFrame) + floor(_Time.y · AnimationSpeed)`, row-major from the top-left cell, wrapped over the frame count when `_Loop`; `rgb = tex·_Color + tex·_EmissionColor·_EmissionIntensity`, `a = tex.a·_Color.a`) | `version`, `rows` (`Rows_Number`), `columns` (`Columns_Number`), `frameCount` (`_FrameCount`, 0 = all cells), `fps` (`AnimationSpeed`), `startFrame`, `loop`, `manualMode`, `manualFrame`, `color {r,g,b,a}` (`_Color`, rgb linear, a raw), `emission {r,g,b}` (`_EmissionColor × max(_EmissionIntensity, 0)`, **raw HDR** like `simpleLit` emission), `insetPixels`, `alphaClip`, `cutoff`, `cullMode` 0, `textures {_MainTex}` (colour texture), `textureNames`; glTF `doubleSided`, alphaMode BLEND |
+| `engineFlame` (fork only) | `Axon/Mobile Engine Flame` (textureless additive fumes: `Blend SrcAlpha One`, ZWrite Off, Cull Back; per-object phase from `_Time.y · _Speed` + the object's world origin) | `version`, `coreColor {r,g,b}` / `tailColor {r,g,b}` (`_CoreColor` / `_TailColor`, **raw HDR**), `intensity` (`_Intensity`), `speed` (`_Speed`), `cullMode` 2; glTF alphaMode BLEND |
+
+HDR colours (`[HDR]` properties) are written raw, without a gamma→linear conversion: a Unity frame of the
+1040 console screens measures 2.4–2.7× the atlas texels in linear light, i.e. `10.42 × 0.24 = 2.50`, where a
+`GammaToLinear` of the stored HDR value would give ~42×.
 
 - `textures` values are glTF **texture indices**. Linear data maps (normals, RMA, emission, detail,
   hair) are exported with UnityGLTF's linear "unknown" settings, as art v2; colour maps

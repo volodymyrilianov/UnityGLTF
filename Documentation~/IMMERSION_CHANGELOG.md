@@ -3,6 +3,18 @@
 Fork-specific history (upstream's `CHANGELOG.md` is left untouched so upstream merges stay
 clean). Current layout and concern map: `IMMERSION.md`; lighting contract: `IMMERSION_lighting.md`.
 
+## 2026-10-23 — Axon flipbook + engine flame materials, scene timelines
+
+- `GltfCustomData`: `Axona/Flipbook Emissive URP` → `customShader.shader = "flipbook"` (atlas rows / columns / frame
+  count / fps / start frame / loop / manual frame, `_Color`, raw HDR emission, inset, alpha clip; `_MainTex` as the
+  colour texture) and `Axon/Mobile Engine Flame` → `"engineFlame"` (raw HDR core / tail colours, intensity, speed).
+  Both used to export as plain PBR (black base colour: the 1040 console screens rendered dark).
+- `DirectorBakeProbe` (play mode): records every transform + activeSelf under each play-on-awake PlayableDirector's
+  bound objects at a fixed step, on the director's time axis, including what the bound Animator's controller does
+  after a wrap-None director stops.
+- `SceneBatchExporter -animations false` (no controller clips) and `-activate <paths>` (export objects a timeline
+  switches on).
+
 ## 2026-10-14 — Clip bake: the key before the clip end, and a looping clip's last key
 
 204 `A_Talk_Relaxed_2` (looping, not seamless: its end pose is ~75 mm / 10 deg from its start at the fingertips)
