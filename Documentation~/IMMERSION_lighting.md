@@ -72,6 +72,12 @@ HDR colours (`[HDR]` properties) are written raw, without a gamma→linear conve
   `baseColorTexture` when UnityGLTF picked that texture up too.
 - `textureNames {slot: name}` = the source Unity texture names, for name-based tooling
   (`glb-optimize`, editor inventory / material packs) and index cross-checks after optimizers.
+- `_EmissionMap` (simpleLit) is sampled by the web as linear data but authored sRGB: an
+  sRGB-imported emission map is blitted into a float linear target and quantised to 8-bit with
+  ±0.5 LSB dither (one noise value per pixel shared by r/g/b, fixed seed), with a mip chain. A plain
+  8-bit linear blit keeps ~4 levels for sRGB 0–20, which banded the 1040 space sky. The image must
+  stay lossless downstream (`glb-optimize` / the editor texture pass keep emission-only surfaces
+  lossless).
 - Normal maps (`_BumpMap`, `_DetailNormalMap`) are decoded to plain RGB, **not green-flipped**
   (equals the authored OpenGL-convention source PNG), with a mip chain, and decoded ONCE per
   source texture per export (the art v2 GLB carried 13 duplicate normal images).

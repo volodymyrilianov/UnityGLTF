@@ -129,6 +129,12 @@ public partial class GltfCustomDataExporter : GLTFExportPluginContext
     /// </summary>
     private readonly Dictionary<(int, int, int, bool), Texture2D> _decodedNormals = new();
 
+    /// <summary>Dithered linear emission maps, one per (source texture, width, height) — see <see cref="DitherLinearEmission"/>.</summary>
+    private readonly Dictionary<(int, int, int), Texture2D> _ditheredEmission = new();
+
+    /// <summary>Fixed dither seed: the same source always exports the same bytes.</summary>
+    private const int EMISSION_DITHER_SEED = 0x5EED;
+
     public GltfCustomDataExporter(bool embedFullLightmapPages = false, int maxTextureSize = 0, int maxLightmapSize = 0)
     {
         _embedFullLightmapPages = embedFullLightmapPages;
@@ -259,7 +265,9 @@ public partial class GltfCustomDataExporter : GLTFExportPluginContext
 
         CollectAndExportTextures(
             exporter, material, cs, slots,
-            (name, tex) => name == "_BumpMap" || name == "_DetailNormalMap" ? DecodeNormal(tex) : tex);
+            (name, tex) => name == "_BumpMap" || name == "_DetailNormalMap" ? DecodeNormal(tex)
+                : name == "_EmissionMap" ? DitherLinearEmission(tex)
+                : tex);
     }
 
     // Immersion/Web/GlassLitGi: albedo(_BaseTex) * _BaseColor, probe reflection * _ReflectionStrength,
@@ -477,6 +485,88 @@ public partial class GltfCustomDataExporter : GLTFExportPluginContext
         _tempTexturesToDestroy.Add(decoded);
         return decoded;
     }
+
+    /// <summary>
+    /// The simpleLit <c>_EmissionMap</c> ships LINEAR-encoded 8-bit (the runtime samples every
+    /// extras texture as linear data), but emission maps are authored sRGB. A plain 8-bit linear
+    /// blit keeps only ~4 levels for sRGB 0–20 (linear 0..2), so a dark emissive gradient — the
+    /// 1040 <c>BG_Sphere</c> space sky — bands into flat steps (one linear step at black is
+    /// ~13 sRGB display levels). Here the sRGB texture is blitted into a FLOAT linear target and
+    /// quantised with ±0.5 LSB dither (one noise value per pixel, shared by r/g/b so the grain
+    /// stays colourless): the mip chain and the GPU filter average it back to the true gradient.
+    /// Linear-imported textures are returned unchanged (their plain blit is already exact).
+    /// The image must then stay lossless downstream (glb-optimize / the editor's texture pass
+    /// keep emission-only surfaces lossless).
+    /// </summary>
+    private Texture2D DitherLinearEmission(Texture2D source)
+    {
+        if (!UnityEngine.Experimental.Rendering.GraphicsFormatUtility.IsSRGBFormat(source.graphicsFormat)) return source;
+
+        ClampSize(source.width, source.height, _maxTextureSize, out int w, out int h);
+        var key = (source.GetInstanceID(), w, h);
+        if (_ditheredEmission.TryGetValue(key, out var cached) && cached != null) return cached;
+
+        var desc = new RenderTextureDescriptor(w, h, RenderTextureFormat.ARGBFloat, 0)
+        {
+            msaaSamples = 1,
+            depthBufferBits = 0,
+            sRGB = false,
+            useMipMap = false,
+            autoGenerateMips = false
+        };
+
+        var rt = RenderTexture.GetTemporary(desc);
+        var prev = RenderTexture.active;
+        Texture2D linear = null;
+
+        try
+        {
+            // sRGB texture sampled in a linear-colour-space project: the GPU decodes to linear
+            // floats; the float target keeps the precision the 8-bit target loses.
+            Graphics.Blit(source, rt);
+            RenderTexture.active = rt;
+            linear = new Texture2D(w, h, TextureFormat.RGBAFloat, false, true);
+            linear.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+            linear.Apply(false, false);
+
+            Color[] src = linear.GetPixels();
+            var dst = new Color32[src.Length];
+            var rng = new System.Random(EMISSION_DITHER_SEED);
+            for (int i = 0; i < src.Length; i++)
+            {
+                float noise = (float)rng.NextDouble() - 0.5f;
+                Color c = src[i];
+                dst[i] = new Color32(
+                    QuantizeDithered(c.r, noise), QuantizeDithered(c.g, noise), QuantizeDithered(c.b, noise),
+                    (byte)Mathf.Clamp(Mathf.RoundToInt(c.a * 255f), 0, 255));
+            }
+
+            // mipChain: true, linear: true — as DecodeNormal (the sampler's minFilter follows mipmapCount)
+            var outTex = new Texture2D(w, h, TextureFormat.RGBA32, true, true)
+            {
+                name = source.name,
+                wrapMode = source.wrapMode,
+                filterMode = source.filterMode,
+                anisoLevel = source.anisoLevel
+            };
+            outTex.SetPixels32(dst);
+            outTex.Apply(true, false);
+
+            _ditheredEmission[key] = outTex;
+            // temporaries: kept alive until the exporter has encoded them, then destroyed
+            _tempTexturesToDestroy.Add(outTex);
+            return outTex;
+        }
+        finally
+        {
+            RenderTexture.active = prev;
+            RenderTexture.ReleaseTemporary(rt);
+            if (linear != null) UnityEngine.Object.DestroyImmediate(linear);
+        }
+    }
+
+    private static byte QuantizeDithered(float value, float noise) =>
+        (byte)Mathf.Clamp(Mathf.FloorToInt(value * 255f + 0.5f + noise), 0, 255);
 
     // Bakery/Light (Assets/Bakery/ftLight.shader): `_Color * intensity * _MainTex`, no lighting.
     // Bakery area-light meshes stay visible in Unity as bright unlit panels (URP runs the
