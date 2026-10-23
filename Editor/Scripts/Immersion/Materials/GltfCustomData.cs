@@ -496,7 +496,7 @@ public partial class GltfCustomDataExporter : GLTFExportPluginContext
     /// stays colourless): the mip chain and the GPU filter average it back to the true gradient.
     /// Linear-imported textures are returned unchanged (their plain blit is already exact).
     /// The image must then stay lossless downstream (glb-optimize / the editor's texture pass
-    /// keep emission-only surfaces lossless).
+    /// keep dedicated emission maps — not an albedo reused as emission — lossless).
     /// </summary>
     private Texture2D DitherLinearEmission(Texture2D source)
     {

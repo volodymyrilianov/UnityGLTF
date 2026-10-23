@@ -76,7 +76,7 @@ HDR colours (`[HDR]` properties) are written raw, without a gamma→linear conve
   sRGB-imported emission map is blitted into a float linear target and quantised to 8-bit with
   ±0.5 LSB dither (one noise value per pixel shared by r/g/b, fixed seed), with a mip chain. A plain
   8-bit linear blit keeps ~4 levels for sRGB 0–20, which banded the 1040 space sky. The image must
-  stay lossless downstream (`glb-optimize` / the editor texture pass keep emission-only surfaces
+  stay lossless downstream (`glb-optimize` / the editor texture pass keep dedicated emission maps
   lossless).
 - Normal maps (`_BumpMap`, `_DetailNormalMap`) are decoded to plain RGB, **not green-flipped**
   (equals the authored OpenGL-convention source PNG), with a mip chain, and decoded ONCE per
