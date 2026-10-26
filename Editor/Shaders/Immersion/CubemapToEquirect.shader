@@ -9,6 +9,9 @@ Shader "Hidden/CubemapToEquirect"
         // rendering with a bound probe — in an editor/export blit it is zero, which made
         // every exported probe equirect ALL BLACK.
         _CubeDecode ("Cube HDR Decode", Vector) = (1, 1, 0, 0)
+        // Explicit mip level (SAMPLE_TEXTURECUBE_LOD) — what Unity's avatar shaders read; < 0 = the
+        // plain sample the exporter has always used (ProbeMipDump sets it).
+        _Lod ("LOD", Float) = -1
     }
 
     SubShader
@@ -32,6 +35,7 @@ Shader "Hidden/CubemapToEquirect"
 
             float _DynamicRange;
             float4 _CubeDecode;
+            float _Lod;
 
             struct Attributes
             {
@@ -69,7 +73,10 @@ Shader "Hidden/CubemapToEquirect"
             float4 Frag(Varyings i) : SV_Target
             {
                 float3 dir = normalize(LatLongToDir(i.uv));
-                float3 col = DecodeHDREnvironment(SAMPLE_TEXTURECUBE(_Cube, sampler_Cube, dir), _CubeDecode) / _DynamicRange;
+                float4 raw = _Lod < 0.0
+                    ? SAMPLE_TEXTURECUBE(_Cube, sampler_Cube, dir)
+                    : SAMPLE_TEXTURECUBE_LOD(_Cube, sampler_Cube, dir, _Lod);
+                float3 col = DecodeHDREnvironment(raw, _CubeDecode) / _DynamicRange;
                 return float4(col, 1.0);
             }
             ENDHLSL

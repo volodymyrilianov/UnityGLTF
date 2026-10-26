@@ -3,6 +3,15 @@
 Fork-specific history (upstream's `CHANGELOG.md` is left untouched so upstream merges stay
 clean). Current layout and concern map: `IMMERSION.md`; lighting contract: `IMMERSION_lighting.md`.
 
+## 2026-10-26 — ProbeMipDump (Unity's probe mips as the GPU reads them)
+
+- `Diagnostics/ProbeMipDump.cs`: blits an imported cubemap through `Hidden/CubemapToEquirect` at each `-lods` value
+  (`SAMPLE_TEXTURECUBE_LOD`) into linear float equirects + `probe-mips.json`. `-synthetic` imports known cubes (white, a
+  2×2 point light anywhere) with the `-cube` importer's settings into a temp folder (deleted afterwards). Found the
+  importer's per-mip rules the web runtime now rebuilds (runtime 0.1.73): mips 4–5 solid-angle GGX, mip 6 a
+  per-source-texel lobe ((cos t + 0.7) / 1.7)², mip 7 a 2×2 box of mip 6.
+- `CubemapToEquirect.shader`: `_Lod` (default −1 = the plain sample every exporter path keeps).
+
 ## 2026-10-23 — Axon flipbook + engine flame materials, scene timelines
 
 - `GltfCustomData`: `Axona/Flipbook Emissive URP` → `customShader.shader = "flipbook"` (atlas rows / columns / frame

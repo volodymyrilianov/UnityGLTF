@@ -31,6 +31,7 @@ Editor/Scripts/Immersion/
                 IkHandFrameProbe      play-mode IK hand frame: IK goal rotation -> hand bone world rotation
                 AnimatorSettingsProbe logic-scene Animators: applyRootMotion/modes/avatar/controller + measured root-motion yaw per clip
                 LowerBodyTraceProbe   play-mode per-frame body-bone trace of CharacterIK rigs (controller / IK off / no root motion / clip playable with and without foot IK)
+                ProbeMipDump          GPU samples of an imported probe cube per LOD (+ synthetic white / point-light cubes through the same importer)
                 SceneStatistics       material/shader audit window (art helper)
 Editor/Shaders/Immersion/             RGBMEncode, CubemapToEquirect, NormalDecode, ChannelPack (URP, Shader.Find)
 Runtime/Resources/UnityGLTFCubemapToFaces.shader   6x1 strip blit (Resources.Load — must stay here)
@@ -93,6 +94,9 @@ Unity.exe -batchmode -projectPath <proj> -executeMethod Immersion.Export.IkHandF
 Unity.exe -batchmode -projectPath <proj> -executeMethod Immersion.Export.AnimatorSettingsProbe.Run
   -scenes "Assets/_Project/Scenes/Logic/Logic_X.unity;Assets/.../Logic_Y.unity" -out "C:/dir"
   [-seconds 3] [-playClips "Dismisser=Assets/.../a.anim;Camilla=Assets/.../b.fbx::Take"]   (no -quit)
+
+Unity.exe -batchmode -quit -projectPath <proj> -executeMethod Immersion.Export.ProbeMipDump.Run
+  -cube "Assets/.../Probe.exr" -out "C:/dir" [-lods "0;5.8;6"] [-width 256] [-synthetic "white;delta;delta:face:x:y"]   (no -nographics)
 
 Unity.exe -batchmode -projectPath <proj> -executeMethod Immersion.Export.LowerBodyTraceProbe.Run
   -scene "Assets/_Project/Scenes/Logic/Logic_X.unity" -out "C:/dir" [-rigs "Lisa"] [-seconds 7]   (no -quit)
