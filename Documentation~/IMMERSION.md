@@ -1,6 +1,6 @@
 # IMMERSION additions to UnityGLTF — what is where
 
-This fork (`ufodriverr/UnityGLTF`, branch `Immersion_vova_branch`) is upstream UnityGLTF plus
+This fork (`volodymyrilianov/UnityGLTF`, branch `Immersion_vova_branch`) is upstream UnityGLTF plus
 the Unity → web export toolchain of the Immersion MetaCoach project. It is consumed as a UPM
 package from the git URL; nothing Immersion-specific should live in a consuming project.
 
