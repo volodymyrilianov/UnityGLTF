@@ -138,12 +138,8 @@ namespace UnityGLTF
 
 		private UnityEngine.Mesh GetMeshFromGameObject(GameObject gameObject)
 		{
-			if (gameObject.GetComponent<MeshFilter>())
-			{
-				return gameObject.GetComponent<MeshFilter>().sharedMesh;
-			}
-
-			SkinnedMeshRenderer skinMesh = gameObject.GetComponent<SkinnedMeshRenderer>();
+			// the mesh Unity draws: a leftover MeshFilter next to a SkinnedMeshRenderer is not it (RenderedMesh)
+			var rendered = RenderedMesh(gameObject, out var skinMesh);
 			if (skinMesh)
 			{
 				if (!ExportAnimations && settings.BakeSkinnedMeshes)
@@ -158,10 +154,10 @@ namespace UnityGLTF
 					return _bakedMeshes[skinMesh];
 				}
 
-				return gameObject.GetComponent<SkinnedMeshRenderer>().sharedMesh;
+				return skinMesh.sharedMesh;
 			}
 
-			return null;
+			return rendered;
 		}
 
 		private UnityEngine.Material[] GetMaterialsFromGameObject(GameObject gameObject)

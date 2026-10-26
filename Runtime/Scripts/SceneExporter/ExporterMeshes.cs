@@ -42,27 +42,31 @@ namespace UnityGLTF
 			}
 		}
 
+		/// <summary>
+		/// The mesh Unity draws for this GameObject: the MeshFilter's when a MeshRenderer draws it, else the
+		/// SkinnedMeshRenderer's. A GameObject can carry a leftover MeshFilter next to an added
+		/// SkinnedMeshRenderer (a model prefab instance whose MeshRenderer was removed and an SMR with its own
+		/// skinned mesh added, e.g. the S03 astronaut tethers); the MeshFilter's static mesh is not rendered
+		/// there and has no bind poses, so taking it first broke the skin export ("Accessors can not have a
+		/// count of 0"). Mirrors <see cref="ContainsValidRenderer"/>.
+		/// </summary>
+		internal static Mesh RenderedMesh(GameObject gameObject, out SkinnedMeshRenderer smr)
+		{
+			smr = null;
+			var filter = gameObject.GetComponent<MeshFilter>();
+			if (filter && gameObject.GetComponent<MeshRenderer>()) return filter.sharedMesh;
+			smr = gameObject.GetComponent<SkinnedMeshRenderer>();
+			if (smr) return smr.sharedMesh;
+			return filter ? filter.sharedMesh : null;
+		}
+
 		private static List<UniquePrimitive> GetUniquePrimitivesFromGameObjects(IEnumerable<GameObject> primitives)
 		{
 			var primKeys = new List<UniquePrimitive>();
 
 			foreach (var prim in primitives)
 			{
-				Mesh meshObj = null;
-				SkinnedMeshRenderer smr = null;
-				var filter = prim.GetComponent<MeshFilter>();
-				if (filter)
-				{
-					meshObj = filter.sharedMesh;
-				}
-				else
-				{
-					smr = prim.GetComponent<SkinnedMeshRenderer>();
-					if (smr)
-					{
-						meshObj = smr.sharedMesh;
-					}
-				}
+				var meshObj = RenderedMesh(prim, out var smr);
 
 				if (!meshObj)
 				{

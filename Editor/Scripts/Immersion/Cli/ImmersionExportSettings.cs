@@ -43,6 +43,21 @@ namespace Immersion.Export
 
 			foreach (var plugin in settings.ExportPlugins)
 			{
+				// A project that still carries the art team's app-repo copy of the Revolution exporter
+				// (Assets/_Project/Revolution/Editor/GltfCustomData.cs, global namespace, same type name and
+				// display name, GUIDs shared with the package) registers it NEXT TO this package's plugin. Both
+				// write extras.customShader, the copy last, so its older output replaced the package's contract
+				// v2 on every simpleLit / glass / hair material (no "version": 2, no dithered linear emission
+				// map) and its own 2048 cap squashed the 8192x4096 S03 sky to 2048x2048. The package plugin is a
+				// superset of that copy (header of Immersion/Materials/GltfCustomData.cs), so batch exports
+				// switch the copy off (unitygltf-fork-inventory: app-repo copies are to be deleted).
+				if (plugin && !(plugin is GltfCustomData) && plugin.GetType().Name == nameof(GltfCustomData))
+				{
+					plugin.Enabled = false;
+					UnityEngine.Debug.Log("[ImmersionExportSettings] disabled the duplicate '" + plugin.DisplayName + "' plugin from "
+						+ plugin.GetType().Assembly.GetName().Name + " (the package's GltfCustomData exports the same contract, v2)");
+					continue;
+				}
 				switch (plugin)
 				{
 					case GltfCustomData customData:
