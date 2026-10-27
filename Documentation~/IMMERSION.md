@@ -24,7 +24,7 @@ Editor/Scripts/Immersion/
                 LightingExportUtils   cube -> strip blit, skybox bake, temp-texture pool
   Cli/          SceneBatchExporter    CLI: whole scenes -> GLB + sidecars (-animations false, -activate for timeline bakes)
                 DirectorBakeProbe     play mode: what a scene's play-on-awake PlayableDirectors do to their bound objects, 60 Hz
-                AvatarProbeExporter   CLI: logic scene -> one RGBM equirect PNG per avatar probe + manifest
+                AvatarProbeExporter   CLI: logic scene -> one RGBM equirect PNG per avatar probe (+ per-renderer probes, e.g. eyes) + manifest
                 ImmersionExportSettings  the plugin defaults every web export needs
                 CliArgs               -executeMethod argument helpers
   Diagnostics/  TwistProbe            play-mode twist-bone ground truth (closed investigation)
@@ -32,6 +32,7 @@ Editor/Scripts/Immersion/
                 AnimatorSettingsProbe logic-scene Animators: applyRootMotion/modes/avatar/controller + measured root-motion yaw per clip
                 LowerBodyTraceProbe   play-mode per-frame body-bone trace of CharacterIK rigs (controller / IK off / no root motion / clip playable with and without foot IK)
                 ProbeMipDump          GPU samples of an imported probe cube per LOD (+ synthetic white / point-light cubes through the same importer)
+                RendererProbeDump     the probe Unity binds to each renderer (GetClosestReflectionProbes) + every probe's box / importance / intensity
                 SceneStatistics       material/shader audit window (art helper)
 Editor/Shaders/Immersion/             RGBMEncode, CubemapToEquirect, NormalDecode, ChannelPack (URP, Shader.Find)
 Runtime/Resources/UnityGLTFCubemapToFaces.shader   6x1 strip blit (Resources.Load — must stay here)
@@ -97,6 +98,9 @@ Unity.exe -batchmode -projectPath <proj> -executeMethod Immersion.Export.Animato
 
 Unity.exe -batchmode -quit -projectPath <proj> -executeMethod Immersion.Export.ProbeMipDump.Run
   -cube "Assets/.../Probe.exr" -out "C:/dir" [-lods "0;5.8;6"] [-width 256] [-synthetic "white;delta;delta:face:x:y"]   (no -nographics)
+
+Unity.exe -batchmode -quit -projectPath <proj> -executeMethod Immersion.Export.RendererProbeDump.Run
+  -scene "Assets/_Project/Scenes/Logic/Logic_X.unity" -out "C:/dir/renderer-probes.json" [-additive "Main.unity;Enviro.unity"] [-filter "Organica"]
 
 Unity.exe -batchmode -projectPath <proj> -executeMethod Immersion.Export.LowerBodyTraceProbe.Run
   -scene "Assets/_Project/Scenes/Logic/Logic_X.unity" -out "C:/dir" [-rigs "Lisa"] [-seconds 7]   (no -quit)

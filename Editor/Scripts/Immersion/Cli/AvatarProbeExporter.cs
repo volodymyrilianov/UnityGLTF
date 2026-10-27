@@ -40,10 +40,18 @@ namespace Immersion.Export
 	/// Encode = <c>HelperTools/probe-tools/exr2equirect.py --rgbm --webready --range 64</c>, ported
 	/// 1:1 (same direction mapping, bilinear face sampling, RGBM quantisation, web-ready vertical
 	/// flip + 180° yaw): <c>4w × 2w</c> RGBA8 PNG, <c>hdr = rgb · (a/255) · range</c> (linear).
+	/// <c>intensity</c> in the manifest (and its <c>avatarProbe</c> fragment) is the multiplier Unity's shaders apply,
+	/// <c>textureHDRDecodeValues.x</c> (the Inspector value gamma → linear in a linear project; Inspector value kept as
+	/// <c>inspectorIntensity</c>).
 	/// Output name <c>&lt;prefix&gt;_&lt;avatar&gt;_Equirect_RGBM&lt;range&gt;[_webready].png</c> — the editor
 	/// Avatar Probe card prefills <c>rgbmRange</c> from the <c>_RGBM&lt;n&gt;</c> token and picks the
 	/// all-default orientation for <c>_webready</c>. Manifest <c>&lt;prefix&gt;_avatar_probes.json</c>
 	/// lists avatar → file, intensity, rgbmRange, source probe/cubemap.
+	///
+	/// Per-renderer probes: Unity anchors probes per renderer, and a renderer whose anchor resolves to another probe
+	/// than its avatar's (1019: the <c>Organica</c> eyes and teeth on <c>RP_Avatars_Eyes</c>) is exported too, once per
+	/// probe, as <c>&lt;prefix&gt;_&lt;probe&gt;_Equirect_RGBM&lt;range&gt;[_webready].png</c>, and listed under the avatar's
+	/// <c>renderers</c> (renderer name → file, intensity, probe) — the web's <c>entry.avatar.probe.renderers</c>.
 	///
 	/// Exit code 0 = every avatar with an anchored probe exported; 1 = a failure (lines start with
 	/// "[AvatarProbeExporter]").
@@ -98,6 +106,7 @@ namespace Immersion.Export
 			public string Resolution;
 			public int Renderers;
 			public int RenderersOnOtherProbes;
+			public Dictionary<string, ReflectionProbe> OtherRenderers;
 		}
 
 		private static int Export(GameObject[] roots, string scenePath, string prefix, string outDir,
@@ -105,8 +114,9 @@ namespace Immersion.Export
 		{
 			var allProbes = roots.SelectMany(r => r.GetComponentsInChildren<ReflectionProbe>(true)).ToArray();
 
-			// avatar -> (probe -> renderer count)
+			// avatar -> (probe -> renderer count), avatar -> (renderer name -> probe)
 			var votes = new Dictionary<GameObject, Dictionary<ReflectionProbe, int>>();
+			var byRenderer = new Dictionary<GameObject, Dictionary<string, ReflectionProbe>>();
 			var resolutions = new Dictionary<ReflectionProbe, string>();
 			var others = new JArray();
 			foreach (var renderer in roots.SelectMany(r => r.GetComponentsInChildren<Renderer>(true)))
@@ -125,6 +135,8 @@ namespace Immersion.Export
 				var avatar = animator.gameObject;
 				if (!votes.TryGetValue(avatar, out var perProbe)) votes[avatar] = perProbe = new Dictionary<ReflectionProbe, int>();
 				perProbe[probe] = perProbe.TryGetValue(probe, out var n) ? n + 1 : 1;
+				if (!byRenderer.TryGetValue(avatar, out var names)) byRenderer[avatar] = names = new Dictionary<string, ReflectionProbe>();
+				names[renderer.name] = probe;
 			}
 
 			var avatars = votes
@@ -135,6 +147,7 @@ namespace Immersion.Export
 					{
 						Avatar = kv.Key, Probe = best.Key, Resolution = resolutions[best.Key],
 						Renderers = best.Value, RenderersOnOtherProbes = kv.Value.Values.Sum() - best.Value,
+						OtherRenderers = byRenderer[kv.Key].Where(r => r.Value != best.Key).ToDictionary(r => r.Key, r => r.Value),
 					};
 				})
 				.Where(a => only.Count == 0 || only.Contains(a.Avatar.name))
@@ -145,6 +158,7 @@ namespace Immersion.Export
 			var entries = new JArray();
 			var failures = 0;
 			var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			var rendererFiles = new Dictionary<ReflectionProbe, JObject>();
 			foreach (var a in avatars)
 			{
 				var label = a.Avatar.name;
@@ -164,6 +178,41 @@ namespace Immersion.Export
 					var fileName = baseName + "_Equirect_RGBM" + rangeToken + (webready ? "_webready" : "") + ".png";
 					File.WriteAllBytes(Path.Combine(outDir, fileName), png);
 
+					var renderers = new JObject();
+					foreach (var other in a.OtherRenderers.OrderBy(r => r.Key, StringComparer.Ordinal))
+					{
+						var rp2 = other.Value;
+						if (!rendererFiles.TryGetValue(rp2, out var entry2))
+						{
+							var cube2 = (rp2.mode == ReflectionProbeMode.Custom ? rp2.customBakedTexture : rp2.bakedTexture) ?? rp2.texture;
+							var cubePath2 = cube2 != null ? AssetDatabase.GetAssetPath(cube2) : null;
+							if (string.IsNullOrEmpty(cubePath2) || !cubePath2.EndsWith(".exr", StringComparison.OrdinalIgnoreCase))
+								throw new Exception("renderer '" + other.Key + "': probe '" + PathOf(rp2.transform) + "' has no baked .exr cubemap");
+							var strip2 = ReadExrStrip(cubePath2, out var face2, out var stripWidth2, out var hdrMax2);
+							var png2 = EncodeEquirect(strip2, face2, stripWidth2, range, webready, out var clipped2);
+							var name2 = Sanitize(prefix + "_" + rp2.name);
+							while (!usedNames.Add(name2)) name2 += "_";
+							var file2 = name2 + "_Equirect_RGBM" + rangeToken + (webready ? "_webready" : "") + ".png";
+							File.WriteAllBytes(Path.Combine(outDir, file2), png2);
+							entry2 = new JObject
+							{
+								["file"] = file2,
+								["intensity"] = WebIntensity(rp2),
+								["inspectorIntensity"] = rp2.intensity,
+								["avatarProbe"] = new JObject { ["intensity"] = WebIntensity(rp2), ["rgbmRange"] = range },
+								["probe"] = new JObject
+								{
+									["path"] = PathOf(rp2.transform), ["mode"] = rp2.mode.ToString(), ["cubemap"] = cubePath2,
+									["faceSize"] = face2, ["hdrMax"] = hdrMax2, ["clippedTexelPercent"] = clipped2,
+								},
+							};
+							rendererFiles[rp2] = entry2;
+							Debug.Log("[AvatarProbeExporter] OK probe " + PathOf(rp2.transform) + " -> " + file2 + " (" + cubePath2
+								+ ", intensity " + rp2.intensity.ToString(CultureInfo.InvariantCulture) + ")");
+						}
+						renderers[other.Key] = entry2.DeepClone();
+					}
+
 					entries.Add(new JObject
 					{
 						["avatar"] = label,
@@ -173,11 +222,12 @@ namespace Immersion.Export
 						["file"] = fileName,
 						["width"] = face * 4,
 						["height"] = face * 2,
-						["intensity"] = rp.intensity,
+						["intensity"] = WebIntensity(rp),
+						["inspectorIntensity"] = rp.intensity,
 						["rgbmRange"] = range,
 						["webready"] = webready,
 						// the scene-config fragment for this avatar (objectId = the uploaded PNG's object)
-						["avatarProbe"] = new JObject { ["intensity"] = rp.intensity, ["rgbmRange"] = range },
+						["avatarProbe"] = new JObject { ["intensity"] = WebIntensity(rp), ["rgbmRange"] = range },
 						["probe"] = new JObject
 						{
 							["path"] = PathOf(rp.transform),
@@ -188,8 +238,10 @@ namespace Immersion.Export
 							["hdrMax"] = hdrMax,
 							["clippedTexelPercent"] = clippedPercent,
 						},
-						["renderers"] = a.Renderers,
+						["renderersOnProbe"] = a.Renderers,
 						["renderersOnOtherProbes"] = a.RenderersOnOtherProbes,
+						// renderer name -> its own probe (the scene-config `entry.avatar.probe.renderers` fragment)
+						["renderers"] = renderers,
 					});
 					Debug.Log("[AvatarProbeExporter] OK " + label + " -> " + fileName + " (probe " + PathOf(rp.transform)
 						+ " [" + a.Resolution + "], " + cubePath + ", intensity " + rp.intensity.ToString(CultureInfo.InvariantCulture)
@@ -226,6 +278,11 @@ namespace Immersion.Export
 			}
 			return failures;
 		}
+
+		// The multiplier Unity's shaders apply to this probe: unity_SpecCube0_HDR.x = textureHDRDecodeValues.x, which in a
+		// linear-colour project is the Inspector intensity taken gamma -> linear (1019: 0.82 -> 0.638, 1.13 -> 1.3085). The
+		// web multiplies by entry.avatar.probe.intensity as is, so this is the value it gets.
+		private static double WebIntensity(ReflectionProbe rp) => Math.Round(rp.textureHDRDecodeValues.x, 5);
 
 		// The probe an anchor stands for: the component on the anchor (the Optimized avatars
 		// anchor at their own OptimizedReflectionProbe), else the baked probe whose box contains

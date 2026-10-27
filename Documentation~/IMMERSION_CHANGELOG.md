@@ -3,6 +3,18 @@
 Fork-specific history (upstream's `CHANGELOG.md` is left untouched so upstream merges stay
 clean). Current layout and concern map: `IMMERSION.md`; lighting contract: `IMMERSION_lighting.md`.
 
+## 2026-10-27 — per-renderer avatar probes (1019 eyes), RendererProbeDump
+
+- `AvatarProbeExporter`: a renderer whose anchor resolves to another probe than its avatar's (1019: `Organica`, the eyes
+  and teeth, on `RP_Avatars_Eyes` ×0.82 / Axona `RP_Avatars_Eyes_Axona` ×1.13 while body, clothes and hair sit on
+  `RP_Avatars`) is exported too, once per probe (`<prefix>_<probe>_Equirect_RGBM<range>[_webready].png`), and listed in
+  the manifest under the avatar's `renderers` map (the web's `entry.avatar.probe.renderers`, runtime 0.1.74). The
+  per-avatar renderer count moved to `renderersOnProbe`.
+- `Diagnostics/RendererProbeDump.cs`: what `Renderer.GetClosestReflectionProbes` returns for every avatar / anchored
+  renderer of a scene (`-additive` loads the play-mode set next to it), plus each probe's box, importance, intensity and
+  cubemap. Settled that each 1019 `Organica` binds its anchor's own probe, though both eye probes share one position and
+  box (the play-mode capture agrees).
+
 ## 2026-10-26 — ProbeMipDump (Unity's probe mips as the GPU reads them)
 
 - `Diagnostics/ProbeMipDump.cs`: blits an imported cubemap through `Hidden/CubemapToEquirect` at each `-lods` value
