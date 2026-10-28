@@ -43,7 +43,8 @@ namespace Immersion.Export
 	/// via the fork's <see cref="SchemaExtensions"/> (position (−x,y,z), rotation (x,−y,−z,w)).
 	///
 	/// <c>muscles</c>: Unity's muscle → pose map of the Avatar (zero pose, one axis + linear range per DoF, twist
-	/// distribution), measured with <see cref="HumanPoseHandler"/>; see <see cref="ProbeMuscles"/>. Optional
+	/// distribution), measured with <see cref="HumanPoseHandler"/>; see <see cref="ProbeMuscles"/>. <c>muscles.com</c>: Unity's centre of
+	/// mass of the Avatar (per body bone a vector u, COM = hips + Σ R_bone · u), see <see cref="ProbeCenterOfMass"/>. Optional
 	/// <c>-checkOut &lt;file&gt;</c> writes the random check poses every rig was posed with, for the web-side replay.
 	///
 	/// Exit code 0 = every rig written; 1 = at least one failed (the file still holds the others). One line
@@ -427,6 +428,8 @@ namespace Immersion.Export
 				if (maxLinear > 0.01f) throw new Exception("muscle angles are not linear (+-0.5 vs +-1 off by " + F(maxLinear) + " deg)");
 				if (maxStray > 1e-3f) throw new Exception("muscle " + worstStray + " turns a bone that is neither its own nor its twist child (" + F(maxStray) + " deg)");
 
+				var com = ProbeCenterOfMass(animator, root, hips, Set, bodyPos, count, out var comResidualMm);
+
 				var sb = new StringBuilder();
 				sb.Append("{\n        \"version\": 1,\n        \"bones\": {");
 				var firstBone = true;
@@ -446,7 +449,14 @@ namespace Immersion.Export
 					}
 					sb.Append(" }");
 				}
-				sb.Append("\n        }\n      }");
+				sb.Append("\n        },\n        \"com\": {");
+				var firstCom = true;
+				foreach (var kv in com)
+				{
+					sb.Append(firstCom ? " " : ", ").Append('"').Append(kv.Key).Append("\": ").Append(V(kv.Value));
+					firstCom = false;
+				}
+				sb.Append(" }\n      }");
 
 				// Check poses: random muscles in [-0.8, 0.8] + a random bodyRotation, the same sequence on every rig.
 				var rng = new System.Random(20261028);
@@ -467,13 +477,117 @@ namespace Immersion.Export
 				check = cb.ToString();
 
 				summary = "muscles: " + axes.Values.Sum(a => a.Count(x => x.HasValue)) + " DoF on " + axes.Count + " bones, " + twist.Count
-					+ " twist shares, off-axis max " + F(maxOff) + " deg, linearity max " + F(maxLinear) + " deg";
+					+ " twist shares, off-axis max " + F(maxOff) + " deg, linearity max " + F(maxLinear) + " deg"
+					+ ", centre of mass on " + com.Count + " bones (fit residual max " + F(comResidualMm) + " mm)";
 				return sb.ToString();
 			}
 			finally
 			{
 				handler.Dispose();
 			}
+		}
+
+		/// <summary>The body bones Unity's centre of mass is made of (measured: adding toes, eyes, jaw or fingers changes nothing).</summary>
+		private static readonly HumanBodyBones[] ComBones =
+		{
+			HumanBodyBones.Hips, HumanBodyBones.Spine, HumanBodyBones.Chest, HumanBodyBones.UpperChest, HumanBodyBones.Neck, HumanBodyBones.Head,
+			HumanBodyBones.LeftShoulder, HumanBodyBones.RightShoulder, HumanBodyBones.LeftUpperArm, HumanBodyBones.RightUpperArm,
+			HumanBodyBones.LeftLowerArm, HumanBodyBones.RightLowerArm, HumanBodyBones.LeftHand, HumanBodyBones.RightHand,
+			HumanBodyBones.LeftUpperLeg, HumanBodyBones.RightUpperLeg, HumanBodyBones.LeftLowerLeg, HumanBodyBones.RightLowerLeg,
+			HumanBodyBones.LeftFoot, HumanBodyBones.RightFoot,
+		};
+
+		/// <summary>
+		/// Unity's centre of mass of this Avatar as data (descriptor <c>muscles.com</c>): per body bone b a constant vector
+		/// u_b (glTF space, metres, in the bone's own frame) with
+		/// <c>COM = hips position + Σ_b R_b · u_b</c> (positions and rotations relative to the model root). Unity places the
+		/// body so that COM = bodyPosition · humanScale; the model is Σ mass_b · (bone point + R_b · centre_b) rewritten
+		/// along the hierarchy, so it is exact in this form. Measured: 64 random poses (muscles in [−1, 1], random
+		/// bodyRotation) set with <see cref="HumanPoseHandler.SetHumanPose"/>, u solved by least squares against the
+		/// bodyPosition Unity was given. Throws when the fit leaves more than 0.05 mm.
+		/// </summary>
+		private static Dictionary<HumanBodyBones, Vector3> ProbeCenterOfMass(Animator animator, Transform root, Transform hips, Action<float[], Quaternion> set, Vector3 bodyPosition, int muscleCount, out float residualMm)
+		{
+			var bones = ComBones.Select(b => (bone: b, t: animator.GetBoneTransform(b))).Where(x => x.t).ToList();
+			var n = bones.Count * 3;
+			var ata = new double[n, n];
+			var atb = new double[n];
+			var rows = new List<(double[] row, double rhs)>();
+			var rng = new System.Random(20261029);
+			var scale = animator.humanScale;
+			for (var s = 0; s < 64; s++)
+			{
+				var ms = new float[muscleCount];
+				for (var m = 0; m < muscleCount; m++) ms[m] = (float)(rng.NextDouble() * 2 - 1);
+				var br = Quaternion.Euler((float)(rng.NextDouble() * 60 - 30), (float)(rng.NextDouble() * 360 - 180), (float)(rng.NextDouble() * 60 - 30));
+				set(ms, br);
+				// The body position SetHumanPose was given (set() keeps it fixed), × humanScale, root frame → glTF.
+				var target = Gl3(bodyPosition * scale);
+				var hipsP = Gl3(root.InverseTransformPoint(hips.position));
+				var rot = bones.Select(b => Matrix4x4.Rotate(Gl(Quaternion.Inverse(root.rotation) * b.t.rotation))).ToList();
+				for (var axis = 0; axis < 3; axis++)
+				{
+					var row = new double[n];
+					for (var j = 0; j < bones.Count; j++)
+						for (var c = 0; c < 3; c++) row[j * 3 + c] = rot[j][axis, c];
+					var rhs = (double)target[axis] - hipsP[axis];
+					rows.Add((row, rhs));
+					for (var i = 0; i < n; i++)
+					{
+						if (row[i] == 0) continue;
+						for (var k = 0; k < n; k++) ata[i, k] += row[i] * row[k];
+						atb[i] += row[i] * rhs;
+					}
+				}
+			}
+			var u = SolveSymmetric(ata, atb);
+			residualMm = 0;
+			for (var e = 0; e < rows.Count; e += 3)
+			{
+				double d2 = 0;
+				for (var k = 0; k < 3; k++)
+				{
+					double pred = 0;
+					for (var i = 0; i < n; i++) pred += rows[e + k].row[i] * u[i];
+					d2 += (pred - rows[e + k].rhs) * (pred - rows[e + k].rhs);
+				}
+				residualMm = Mathf.Max(residualMm, (float)(Math.Sqrt(d2) * 1000));
+			}
+			if (residualMm > 0.05f) throw new Exception("centre-of-mass model does not fit Unity's poses (residual " + residualMm.ToString("R", CultureInfo.InvariantCulture) + " mm)");
+			var outMap = new Dictionary<HumanBodyBones, Vector3>();
+			for (var j = 0; j < bones.Count; j++) outMap[bones[j].bone] = new Vector3((float)u[j * 3], (float)u[j * 3 + 1], (float)u[j * 3 + 2]);
+			return outMap;
+		}
+
+		private static Vector3 Gl3(Vector3 u) => new Vector3(-u.x, u.y, u.z);
+
+		/// <summary>Solves A·x = b (A symmetric positive definite, the normal equations) by Gaussian elimination with partial pivoting.</summary>
+		private static double[] SolveSymmetric(double[,] a, double[] b)
+		{
+			var n = b.Length;
+			var m = new double[n, n + 1];
+			for (var i = 0; i < n; i++)
+			{
+				for (var j = 0; j < n; j++) m[i, j] = a[i, j];
+				m[i, n] = b[i];
+			}
+			for (var c = 0; c < n; c++)
+			{
+				var p = c;
+				for (var r = c + 1; r < n; r++) if (Math.Abs(m[r, c]) > Math.Abs(m[p, c])) p = r;
+				if (Math.Abs(m[p, c]) < 1e-12) throw new Exception("centre-of-mass fit is singular");
+				if (p != c) for (var k = 0; k <= n; k++) { var t = m[c, k]; m[c, k] = m[p, k]; m[p, k] = t; }
+				for (var r = 0; r < n; r++)
+				{
+					if (r == c) continue;
+					var f = m[r, c] / m[c, c];
+					if (f == 0) continue;
+					for (var k = c; k <= n; k++) m[r, k] -= f * m[c, k];
+				}
+			}
+			var x = new double[n];
+			for (var i = 0; i < n; i++) x[i] = m[i, n] / m[i, i];
+			return x;
 		}
 
 		private static void Collect(Transform t, List<Transform> into)
