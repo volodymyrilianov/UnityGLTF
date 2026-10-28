@@ -7,6 +7,8 @@ using System.Text;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.Animations;
+using UnityEngine.Playables;
 using UnityGLTF.Extensions;
 
 namespace Immersion.Export
@@ -44,7 +46,9 @@ namespace Immersion.Export
 	///
 	/// <c>muscles</c>: Unity's muscle → pose map of the Avatar (zero pose, one axis + linear range per DoF, twist
 	/// distribution), measured with <see cref="HumanPoseHandler"/>; see <see cref="ProbeMuscles"/>. <c>muscles.com</c>: Unity's centre of
-	/// mass of the Avatar (per body bone a vector u, COM = hips + Σ R_bone · u), see <see cref="ProbeCenterOfMass"/>. Optional
+	/// mass of the Avatar (per body bone a vector u, COM = hips + Σ R_bone · u), see <see cref="ProbeCenterOfMass"/>. <c>muscles.tdof</c>
+	/// (only when the Avatar has Translation DoF): what a clip's <c>&lt;Bone&gt;TDOF.x/y/z</c> curves do to the bone's local
+	/// position, see <see cref="ProbeTranslationDoF"/>. Optional
 	/// <c>-checkOut &lt;file&gt;</c> writes the random check poses every rig was posed with, for the web-side replay.
 	///
 	/// Exit code 0 = every rig written; 1 = at least one failed (the file still holds the others). One line
@@ -456,7 +460,10 @@ namespace Immersion.Export
 					sb.Append(firstCom ? " " : ", ").Append('"').Append(kv.Key).Append("\": ").Append(V(kv.Value));
 					firstCom = false;
 				}
-				sb.Append(" }\n      }");
+				sb.Append(" }");
+				var tdof = ProbeTranslationDoF(animator, out var tdofSummary);
+				if (tdof != null) sb.Append(",\n        \"tdof\": ").Append(tdof);
+				sb.Append("\n      }");
 
 				// Check poses: random muscles in [-0.8, 0.8] + a random bodyRotation, the same sequence on every rig.
 				var rng = new System.Random(20261028);
@@ -478,13 +485,158 @@ namespace Immersion.Export
 
 				summary = "muscles: " + axes.Values.Sum(a => a.Count(x => x.HasValue)) + " DoF on " + axes.Count + " bones, " + twist.Count
 					+ " twist shares, off-axis max " + F(maxOff) + " deg, linearity max " + F(maxLinear) + " deg"
-					+ ", centre of mass on " + com.Count + " bones (fit residual max " + F(comResidualMm) + " mm)";
+					+ ", centre of mass on " + com.Count + " bones (fit residual max " + F(comResidualMm) + " mm)"
+					+ ", " + tdofSummary;
 				return sb.ToString();
 			}
 			finally
 			{
 				handler.Dispose();
 			}
+		}
+
+		// ---- translation DoF, probed -------------------------------------------------------------
+
+		private const float TdofProbeValue = 0.1f;
+
+		/// <summary>
+		/// What a humanoid clip's translation-DoF curves (<c>&lt;Bone&gt;TDOF.x/y/z</c>, Animator float curves; Unity plays
+		/// them only on an Avatar with <c>humanDescription.hasTranslationDoF</c>) do to the bone's LOCAL position, per
+		/// bone: <c>{ "Head": { "cols": [col x, col y, col z], "mass": m }, … }</c>.
+		/// <list type="bullet">
+		/// <item><c>cols</c>: the local-position change (glTF space, metres, in the node parent's frame) per unit curve
+		/// value, so <c>local position = T-pose position + Σ value_i · col_i</c>.</item>
+		/// <item><c>mass</c>: the share of the body's centre of mass that moves with the bone. Unity keeps the centre of mass
+		/// on bodyPosition, so the hips move by <c>−mass · d</c> when the bone moves by <c>d</c> relative to them. Written
+		/// only when the hips shift is exactly that (residual ≤ 0.01 mm per unit). Bones that move the body frame (upper
+		/// legs, spine chain, shoulders, upper arms) also turn the hips, so they carry no <c>mass</c>.</item>
+		/// </list>
+		/// Measured by playing in-memory clips (all muscles 0, TDOF components at ±<see cref="TdofProbeValue"/>) through the
+		/// pool bake's sampling path (AnimationClipPlayable + AnimationMode): all bones at once for <c>cols</c>, one bone at
+		/// a time for <c>mass</c>. Returns null when no curve moves any bone (an Avatar without Translation DoF). Throws
+		/// when the response is not linear (±v disagree by more than 1e-4 m per unit).
+		/// </summary>
+		private static string ProbeTranslationDoF(Animator animator, out string summary)
+		{
+			var inv = CultureInfo.InvariantCulture;
+			string F(float v) => v.ToString("R", inv);
+			var candidates = new List<(HumanBodyBones bone, Transform t)>();
+			for (var b = 0; b < (int)HumanBodyBones.LastBone; b++)
+			{
+				if ((HumanBodyBones)b == HumanBodyBones.Hips) continue;
+				var t = animator.GetBoneTransform((HumanBodyBones)b);
+				if (t) candidates.Add(((HumanBodyBones)b, t));
+			}
+			var transforms = candidates.Select(c => c.t).ToArray();
+			var root = animator.transform;
+			var hips = animator.GetBoneTransform(HumanBodyBones.Hips);
+			// Per sample: every candidate's local position, the hips and every candidate relative to the model root (glTF).
+			(Vector3[] local, Vector3 hips, Vector3[] model) Sample(int axis, float v, int only = -1)
+			{
+				var clip = new AnimationClip { name = "tdof-probe" };
+				void Curve(string prop, float value) =>
+					AnimationUtility.SetEditorCurve(clip, EditorCurveBinding.FloatCurve("", typeof(Animator), prop), AnimationCurve.Constant(0f, 1f, value));
+				for (var m = 0; m < HumanTrait.MuscleCount; m++) Curve(HumanoidClipExporter.MuscleCurveName(HumanTrait.MuscleName[m]), 0f);
+				Curve("RootT.x", 0f); Curve("RootT.y", 1f); Curve("RootT.z", 0f);
+				Curve("RootQ.x", 0f); Curve("RootQ.y", 0f); Curve("RootQ.z", 0f); Curve("RootQ.w", 1f);
+				if (axis >= 0)
+					for (var c = 0; c < candidates.Count; c++)
+						if (only < 0 || only == c) Curve(candidates[c].bone + "TDOF." + "xyz"[axis], v);
+				var graph = PlayableGraph.Create();
+				var driver = ScriptableObject.CreateInstance<AnimationModeDriver>();
+				try
+				{
+					var playable = AnimationClipPlayable.Create(graph, clip);
+					playable.SetApplyFootIK(false);
+					var output = AnimationPlayableOutput.Create(graph, "Animation", animator);
+					output.SetSourcePlayable(playable);
+					graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+					AnimationMode.StartAnimationMode(driver);
+					AnimationMode.BeginSampling();
+					AnimationMode.SamplePlayableGraph(graph, 0, 0f);
+					var sampled = (transforms.Select(t => Gl3(t.localPosition)).ToArray(), Gl3(root.InverseTransformPoint(hips.position)),
+						transforms.Select(t => Gl3(root.InverseTransformPoint(t.position))).ToArray());
+					AnimationMode.EndSampling();
+					AnimationMode.StopAnimationMode(driver);
+					return sampled;
+				}
+				finally
+				{
+					if (graph.IsValid()) graph.Destroy();
+					UnityEngine.Object.DestroyImmediate(driver);
+					UnityEngine.Object.DestroyImmediate(clip);
+				}
+			}
+
+			var baseline = Sample(-1, 0f);
+			var cols = new Vector3[candidates.Count, 3];
+			var moved = new bool[candidates.Count];
+			float maxNonLinear = 0;
+			for (var axis = 0; axis < 3; axis++)
+			{
+				var plus = Sample(axis, TdofProbeValue).local;
+				var minus = Sample(axis, -TdofProbeValue).local;
+				for (var i = 0; i < candidates.Count; i++)
+				{
+					var a = (plus[i] - baseline.local[i]) / TdofProbeValue;
+					var b = (baseline.local[i] - minus[i]) / TdofProbeValue;
+					maxNonLinear = Mathf.Max(maxNonLinear, (a - b).magnitude);
+					cols[i, axis] = (a + b) * 0.5f;
+					if (cols[i, axis].magnitude > 1e-6f) moved[i] = true;
+				}
+			}
+			if (maxNonLinear > 1e-4f) throw new Exception("translation DoF is not linear in the curve value (+-" + F(TdofProbeValue) + " differ by " + F(maxNonLinear) + " m per unit)");
+			var bones = Enumerable.Range(0, candidates.Count).Where(i => moved[i]).ToList();
+			if (bones.Count == 0)
+			{
+				summary = "translation DoF: no bone moves";
+				return null;
+			}
+			// Centre-of-mass share per bone: move one bone at a time along each of its moving columns; the hips shift by
+			// −mass × (the bone's shift relative to the hips), the same mass on every axis.
+			const float massTolerance = 1e-5f; // m per unit curve value (0.01 mm)
+			var mass = new Dictionary<int, float>();
+			float maxMassResidual = 0;
+			var noMass = new List<string>();
+			foreach (var i in bones)
+			{
+				double num = 0, den = 0;
+				var shifts = new List<(Vector3 dh, Vector3 rel)>();
+				for (var axis = 0; axis < 3; axis++)
+				{
+					if (cols[i, axis].magnitude <= 1e-6f) continue;
+					var s = Sample(axis, TdofProbeValue, i);
+					var dh = (s.hips - baseline.hips) / TdofProbeValue;
+					var rel = (s.model[i] - s.hips - (baseline.model[i] - baseline.hips)) / TdofProbeValue;
+					shifts.Add((dh, rel));
+					num -= Vector3.Dot(dh, rel);
+					den += Vector3.Dot(rel, rel);
+				}
+				var m = den > 0 ? (float)(num / den) : 0f;
+				var residual = shifts.Count > 0 ? shifts.Max(x => (x.dh + m * x.rel).magnitude) : 0f;
+				if (residual <= massTolerance)
+				{
+					mass[i] = m;
+					maxMassResidual = Mathf.Max(maxMassResidual, residual);
+				}
+				else noMass.Add(candidates[i].bone.ToString());
+			}
+
+			string V(Vector3 v) => "[" + F(v.x) + ", " + F(v.y) + ", " + F(v.z) + "]";
+			var sb = new StringBuilder("{");
+			for (var k = 0; k < bones.Count; k++)
+			{
+				var i = bones[k];
+				sb.Append(k == 0 ? "\n          " : ",\n          ").Append('"').Append(candidates[i].bone).Append("\": { \"cols\": [")
+					.Append(V(cols[i, 0])).Append(", ").Append(V(cols[i, 1])).Append(", ").Append(V(cols[i, 2])).Append(']');
+				if (mass.TryGetValue(i, out var m)) sb.Append(", \"mass\": ").Append(F(m));
+				sb.Append(" }");
+			}
+			sb.Append("\n        }");
+			summary = "translation DoF on " + bones.Count + " bones (non-linearity max " + F(maxNonLinear) + " m; centre-of-mass share on "
+				+ mass.Count + ", residual max " + F(maxMassResidual * 1000) + " mm per unit; no share (they turn the hips): "
+				+ (noMass.Count > 0 ? string.Join("/", noMass) : "none") + ")";
+			return sb.ToString();
 		}
 
 		/// <summary>The body bones Unity's centre of mass is made of (measured: adding toes, eyes, jaw or fingers changes nothing).</summary>
