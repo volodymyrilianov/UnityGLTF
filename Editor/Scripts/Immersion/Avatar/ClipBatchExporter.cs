@@ -208,7 +208,7 @@ namespace Immersion.Export
 		}
 
 		/// <summary>A <c>.anim</c> main asset, or <c>path::clipName</c> for a sub-asset clip (e.g. an FBX take).</summary>
-		private static AnimationClip LoadClip(string source)
+		internal static AnimationClip LoadClip(string source)
 		{
 			var sep = source.IndexOf("::", StringComparison.Ordinal);
 			if (sep < 0) return AssetDatabase.LoadAssetAtPath<AnimationClip>(source);
@@ -350,7 +350,7 @@ namespace Immersion.Export
 			return p;
 		}
 
-		private static IEnumerable<AnimatorState> AllStates(AnimatorStateMachine machine)
+		internal static IEnumerable<AnimatorState> AllStates(AnimatorStateMachine machine)
 		{
 			if (!machine) yield break;
 			foreach (var child in machine.states) yield return child.state;
